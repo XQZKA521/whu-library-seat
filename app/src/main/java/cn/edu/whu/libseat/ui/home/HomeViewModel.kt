@@ -15,6 +15,7 @@ import cn.edu.whu.libseat.domain.model.Reservation
 import cn.edu.whu.libseat.domain.model.RoomStats
 import cn.edu.whu.libseat.domain.model.UserProfile
 import cn.edu.whu.libseat.domain.usecase.QuickBookUseCase
+import cn.edu.whu.libseat.widget.WidgetSync
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -123,6 +124,8 @@ class HomeViewModel(
                 val reservation = runCatching { repo.reservations() }
                     .getOrDefault(emptyList())
                     .firstOrNull()
+                // 让小部件状态行与首页保持一致（预约中 / 待签到 / 无预约）
+                WidgetSync.publishReservation(reservation)
                 val profile = if (!settings.demoMode && settings.isLoggedIn) repo.profile() else null
                 // 常用座位的使用统计（官方历史数据，带缓存）
                 _state.update {
@@ -141,6 +144,13 @@ class HomeViewModel(
 
                 // 常用座位的使用统计（官方历史数据，带缓存），异步加载，失败不影响首页
                 loadSeatUsage()
+
+                // 小部件：默认馆名称 + 全馆已约/总量（带 10 分钟缓存，仅桌面有小部件时请求）
+                WidgetSync.publishBuilding(
+                    buildingId,
+                    catalog.buildings.firstOrNull { it.id == buildingId }?.name,
+                )
+                WidgetSync.refreshStatsInBackground()
             } catch (e: SessionExpiredException) {
                 val latest = runCatching { repo.currentSettings() }.getOrNull()
                 _state.update {
@@ -194,6 +204,7 @@ class HomeViewModel(
                 .getOrDefault(emptyList())
                 .firstOrNull()
             _state.update { it.copy(reservation = reservation) }
+            WidgetSync.publishReservation(reservation)
             val buildingId = _state.value.buildingId ?: return@launch
             runCatching { repo.roomStats(buildingId, _state.value.floor, TimeText.iso(_state.value.date)) }.onSuccess { rooms ->
                 _state.update { it.copy(rooms = rooms) }
@@ -210,6 +221,12 @@ class HomeViewModel(
         viewModelScope.launch {
             repo.updateDefaultTarget(buildingId, floor)
             refreshRooms(buildingId, floor)
+            // 默认馆变了，小部件的“全馆余量”跟着切
+            WidgetSync.publishBuilding(
+                buildingId,
+                catalog.buildings.firstOrNull { it.id == buildingId }?.name,
+            )
+            WidgetSync.refreshStatsInBackground(force = true)
         }
     }
 
@@ -314,6 +331,7 @@ class HomeViewModel(
         viewModelScope.launch {
             val reservation = runCatching { repo.reservations() }.getOrDefault(emptyList()).firstOrNull()
             _state.update { it.copy(reservation = reservation) }
+            WidgetSync.publishReservation(reservation)
             val buildingId = _state.value.buildingId ?: return@launch
             refreshRooms(buildingId, _state.value.floor)
         }

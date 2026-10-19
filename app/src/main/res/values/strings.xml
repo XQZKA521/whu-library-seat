@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">珞珈座位</string>
+
+    <string name="widget_name">快速预约</string>
+    <string name="widget_description">选择常用座位和时间段，一键预约图书馆座位</string>
 </resources>
