@@ -62,6 +62,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.edu.whu.libseat.LibrarySeatApp
 import cn.edu.whu.libseat.core.time.TimeText
+import cn.edu.whu.libseat.domain.model.Reservation
 import cn.edu.whu.libseat.domain.model.Seat
 import cn.edu.whu.libseat.domain.model.TimeSlot
 import cn.edu.whu.libseat.ui.components.EmptyState
@@ -69,8 +70,10 @@ import cn.edu.whu.libseat.ui.components.InfoBanner
 import cn.edu.whu.libseat.ui.components.LoadingState
 import cn.edu.whu.libseat.ui.components.Pill
 import cn.edu.whu.libseat.ui.components.SeatCell
+import cn.edu.whu.libseat.ui.components.SeatAttrLegend
 import cn.edu.whu.libseat.ui.components.SeatLegend
 import cn.edu.whu.libseat.ui.components.Tag
+import cn.edu.whu.libseat.ui.components.TimeDropdown
 import cn.edu.whu.libseat.ui.simpleViewModelFactory
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -92,6 +95,8 @@ fun SeatMapScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val sheetState = rememberModalBottomSheetState()
+    var showCancelConfirm by remember { mutableStateOf(false) }
+    var showStopConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.messages.collect { snackbar.showSnackbar(it) } }
 
@@ -173,6 +178,18 @@ fun SeatMapScreen(
                 SeatLegend(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
+                SeatAttrLegend(
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                )
+                state.reservation?.let { r ->
+                    ExistingReservationBanner(
+                        reservation = r,
+                        cancelling = state.cancelling,
+                        stopping = state.stopping,
+                        onCancel = { showCancelConfirm = true },
+                        onStop = { showStopConfirm = true },
+                    )
+                }
             }
 
             Box(
@@ -262,6 +279,128 @@ fun SeatMapScreen(
                 }) { Text("知道了") }
             },
         )
+    }
+
+    state.bookError?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { vm.dismissBookError() },
+            title = { Text("预约失败") },
+            text = { Text(msg) },
+            confirmButton = {
+                TextButton(onClick = { vm.dismissBookError() }) { Text("知道了") }
+            },
+        )
+    }
+
+    if (showCancelConfirm) {
+        AlertDialog(
+            onDismissRequest = { showCancelConfirm = false },
+            title = { Text("取消预约") },
+            text = { Text("确认取消当前预约？每天最多可以取消 2 次。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCancelConfirm = false
+                    vm.cancelReservation()
+                }) { Text("确认取消") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCancelConfirm = false }) { Text("再想想") }
+            },
+        )
+    }
+
+    if (showStopConfirm) {
+        AlertDialog(
+            onDismissRequest = { showStopConfirm = false },
+            title = { Text("提前结束") },
+            text = { Text("确认提前结束当前履约中的座位使用？结束后座位将被释放。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showStopConfirm = false
+                    vm.stopUsage()
+                }) { Text("确认结束") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStopConfirm = false }) { Text("再想想") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ExistingReservationBanner(
+    reservation: Reservation,
+    cancelling: Boolean,
+    stopping: Boolean,
+    onCancel: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val inUse = reservation.status.equals("IN_USE", true) ||
+        reservation.status.equals("CHECK_IN", true)
+    val statusLabel = when (reservation.status.uppercase()) {
+        "RESERVE" -> "已预约"
+        "IN_USE" -> "履约中"
+        "AWAY" -> "暂离"
+        "COMPLETE" -> "已结束"
+        else -> reservation.status
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Rounded.EventSeat,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("已有预约", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (inUse) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                    ) {
+                        Text(
+                            statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (inUse) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+                Text(
+                    "${reservation.location.ifBlank { "座位预约" }} · " +
+                        "${reservation.date} ${reservation.begin}-${reservation.end}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+            }
+            if (cancelling || stopping) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else if (inUse) {
+                TextButton(onClick = onStop) { Text("提前结束") }
+            } else {
+                TextButton(onClick = onCancel) { Text("取消") }
+            }
+        }
     }
 }
 
@@ -404,9 +543,9 @@ private fun SeatDetailSheet(
         ) {
             TimeDropdown(
                 label = "开始",
-                value = TimeText.minutesToHhmm(state.start),
+                value = if (state.startIsNow) "现在" else TimeText.minutesToHhmm(state.start),
                 options = state.startSlots.filter {
-                    !isToday || it.minutes >= TimeText.nowRoundedToHalfHour()
+                    it.isNow || !isToday || it.minutes >= TimeText.nowMinutes()
                 }.ifEmpty { state.startSlots },
                 modifier = Modifier.weight(1f),
                 onSelect = { onSelectStart(it.minutes) },
@@ -457,69 +596,5 @@ private fun SeatDetailSheet(
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
-    }
-}
-
-@Composable
-private fun TimeDropdown(
-    label: String,
-    value: String,
-    options: List<TimeSlot>,
-    modifier: Modifier = Modifier,
-    onSelect: (TimeSlot) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier) {
-        Surface(
-            onClick = { expanded = true },
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    value,
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                Icon(
-                    Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.heightIn(max = 300.dp),
-        ) {
-            options.forEach { slot ->
-                DropdownMenuItem(
-                    text = { Text(slot.label) },
-                    onClick = {
-                        expanded = false
-                        onSelect(slot)
-                    },
-                    trailingIcon = {
-                        if (slot.label == value) {
-                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
-                    },
-                )
-            }
-        }
     }
 }

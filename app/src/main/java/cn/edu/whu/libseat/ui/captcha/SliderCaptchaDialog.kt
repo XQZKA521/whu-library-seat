@@ -158,6 +158,14 @@ fun SliderCaptchaDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                state.hint?.let { hint ->
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        hint,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
 
                 Box(
@@ -356,9 +364,11 @@ private val STATE_SCRIPT = """
       window.__seatCapLog = [];
       var err = window.__seatCapErr || null;
       window.__seatCapErr = null;
+      var token = window.__seatCapToken || null;
+      window.__seatCapToken = null;
       return JSON.stringify({
         ready: !!window.__seatCapReady,
-        token: window.__seatCapToken || null,
+        token: token,
         err: err,
         log: l,
         hasTac: !!window.__seatTac,

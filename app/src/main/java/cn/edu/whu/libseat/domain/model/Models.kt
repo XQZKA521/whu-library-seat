@@ -97,11 +97,17 @@ data class HistoryItem(
     val end: String,
     val location: String,
     val status: String,
+    val seatId: Long = 0L,
+    val seatLabel: String = "",
+    val roomName: String = "",
+    val useMinute: Int = 0,
 )
 
 data class TimeSlot(
     val minutes: Int,
     val label: String,
+    /** 官方“现在”选项：预约时按协议传 startMinute=-1，由服务端取当前时间。 */
+    val isNow: Boolean = false,
 )
 
 data class UserProfile(
@@ -109,6 +115,8 @@ data class UserProfile(
     val username: String,
     val violationCount: Int = 0,
     val checkedIn: Boolean = false,
+    val totalMake: Int = 0,
+    val totalMinute: Int = 0,
 )
 
 /** 常用座位：保存后可在首页一键预约。 */

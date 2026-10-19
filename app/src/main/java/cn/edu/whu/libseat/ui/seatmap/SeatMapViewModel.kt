@@ -41,6 +41,12 @@ data class SeatMapUiState(
     val endSlots: List<TimeSlot> = emptyList(),
     val booking: Boolean = false,
     val booked: Reservation? = null,
+    val bookError: String? = null,
+    val reservation: Reservation? = null,
+    val cancelling: Boolean = false,
+    val stopping: Boolean = false,
+    /** 用户选择了官方“现在”选项：预约按协议传 startMinute=-1。 */
+    val startIsNow: Boolean = false,
     val settings: UserSettings = UserSettings(),
 )
 
@@ -73,6 +79,7 @@ class SeatMapViewModel(
                     ?: RoomInfo(roomId, map.roomName.ifBlank { "座位区" }, buildingId, floor)
                 val building = catalog.buildings.firstOrNull { it.id == room.buildingId }
                 val favorites = runCatching { repo.favorites.first() }.getOrDefault(emptyList())
+                val reservation = runCatching { repo.reservations().firstOrNull() }.getOrNull()
                 _state.update {
                     it.copy(
                         loading = false,
@@ -81,6 +88,7 @@ class SeatMapViewModel(
                         building = building,
                         settings = settings,
                         favorites = favorites.map { seat -> seat.seatId }.toSet(),
+                        reservation = reservation,
                         error = null,
                     )
                 }
@@ -98,16 +106,18 @@ class SeatMapViewModel(
             val settings = _state.value.settings
             var desiredStart = settings.defaultStart
             if (_state.value.date == TimeText.today()) {
-                desiredStart = maxOf(desiredStart, TimeText.nowRoundedToHalfHour())
+                // 官方允许从当前精确时间开始，不取整到半小时
+                desiredStart = maxOf(desiredStart, TimeText.nowMinutes())
             }
             val startSlots = runCatching { repo.startTimes(seat.id, dateText) }.getOrDefault(emptyList())
-            val start = startSlots.firstOrNull { it.minutes >= desiredStart }?.minutes
-                ?: startSlots.firstOrNull()?.minutes
-                ?: desiredStart
+            val startSlot = startSlots.firstOrNull { it.minutes >= desiredStart }
+                ?: startSlots.firstOrNull()
+            val start = startSlot?.minutes ?: desiredStart
+            val startIsNow = startSlot?.isNow == true
 
             val endSlots = runCatching { repo.endTimes(seat.id, dateText, start) }.getOrDefault(emptyList())
-            val end = endSlots.firstOrNull { it.minutes >= settings.defaultEnd }?.minutes
-                ?: endSlots.firstOrNull()?.minutes
+            val end = endSlots.firstOrNull { it.minutes >= maxOf(settings.defaultEnd, start + 30) }?.minutes
+                ?: endSlots.firstOrNull { it.minutes > start }?.minutes
                 ?: (start + 60)
 
             _state.update {
@@ -115,6 +125,7 @@ class SeatMapViewModel(
                     selectedSeat = seat,
                     start = start,
                     end = end,
+                    startIsNow = startIsNow,
                     startSlots = startSlots,
                     endSlots = endSlots,
                     selectedFavorite = it.favorites.contains(seat.id),
@@ -129,10 +140,14 @@ class SeatMapViewModel(
 
     fun selectStart(minutes: Int) {
         val seat = _state.value.selectedSeat ?: return
+        val slot = _state.value.startSlots.firstOrNull { it.minutes == minutes }
+        val isNow = slot?.isNow == true
+        _state.update { it.copy(start = minutes, startIsNow = isNow) }
         viewModelScope.launch {
+            // 官方行为：选“现在”时用精确当前分钟拉结束时间
             val endSlots = runCatching { repo.endTimes(seat.id, dateText, minutes) }.getOrDefault(emptyList())
             val end = endSlots.firstOrNull { it.minutes > minutes }?.minutes ?: (minutes + 30)
-            _state.update { it.copy(start = minutes, end = end, endSlots = endSlots) }
+            _state.update { it.copy(end = end, endSlots = endSlots) }
         }
     }
 
@@ -147,20 +162,64 @@ class SeatMapViewModel(
         viewModelScope.launch {
             _state.update { it.copy(booking = true) }
             try {
-                val reservation = repo.book(seat.id, dateText, s.start, s.end)
-                _state.update { it.copy(booking = false, booked = reservation) }
+                // 官方协议：选“现在”时 startMinute 传 -1，服务端取当前时间
+                val startMinute = if (s.startIsNow) -1 else s.start
+                val reservation = repo.book(seat.id, dateText, startMinute, s.end)
+                _state.update {
+                    it.copy(booking = false, booked = reservation, reservation = reservation)
+                }
             } catch (e: SessionExpiredException) {
-                _state.update { it.copy(booking = false) }
-                _messages.emit("登录已失效，请重新登录")
+                _state.update { it.copy(booking = false, bookError = "登录已失效，请重新登录") }
             } catch (e: Exception) {
-                _state.update { it.copy(booking = false) }
-                _messages.emit(e.message ?: "预约失败")
+                // 预约错误用对话框展示，避免被底部卡片挡住
+                _state.update { it.copy(booking = false, bookError = e.message ?: "预约失败") }
             }
         }
     }
 
     fun dismissBooked() {
         _state.update { it.copy(booked = null) }
+    }
+
+    fun dismissBookError() {
+        _state.update { it.copy(bookError = null) }
+    }
+
+    fun cancelReservation() {
+        val r = _state.value.reservation ?: return
+        if (_state.value.cancelling) return
+        viewModelScope.launch {
+            _state.update { it.copy(cancelling = true) }
+            try {
+                repo.cancel(r.id)
+                _state.update { it.copy(reservation = null, cancelling = false) }
+                _messages.emit("预约已取消")
+            } catch (e: Exception) {
+                _state.update { it.copy(cancelling = false) }
+                _messages.emit(e.message ?: "取消失败")
+            }
+        }
+    }
+
+    /** 提前结束履约（官方 make/stop），成功后刷新当前预约状态。 */
+    fun stopUsage() {
+        val r = _state.value.reservation ?: return
+        if (_state.value.stopping) return
+        viewModelScope.launch {
+            _state.update { it.copy(stopping = true) }
+            try {
+                repo.stopUsage(r.id)
+                val latest = runCatching { repo.reservations().firstOrNull() }.getOrNull()
+                _state.update { it.copy(reservation = latest, stopping = false) }
+                _messages.emit("已提前结束使用")
+            } catch (e: SessionExpiredException) {
+                _state.update { it.copy(stopping = false) }
+                _messages.emit("登录已失效，请重新登录")
+            } catch (e: Exception) {
+                _state.update { it.copy(stopping = false) }
+                _messages.emit(e.message ?: "结束使用失败")
+            }
+        }
     }
 
     fun toggleFavorite() {

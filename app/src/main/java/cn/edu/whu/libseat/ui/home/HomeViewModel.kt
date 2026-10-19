@@ -2,11 +2,13 @@ package cn.edu.whu.libseat.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import cn.edu.whu.libseat.core.log.AppLog
 import cn.edu.whu.libseat.core.time.TimeText
 import cn.edu.whu.libseat.data.local.CatalogSnapshot
 import cn.edu.whu.libseat.data.local.UserSettings
 import cn.edu.whu.libseat.data.remote.SessionExpiredException
 import cn.edu.whu.libseat.data.repository.LibraryRepository
+import cn.edu.whu.libseat.ui.stats.SeatUsageStat
 import cn.edu.whu.libseat.domain.model.FavoriteSeat
 import cn.edu.whu.libseat.domain.model.QuickBookResult
 import cn.edu.whu.libseat.domain.model.Reservation
@@ -36,6 +38,8 @@ data class HomeUiState(
     val profile: UserProfile? = null,
     val error: String? = null,
     val bookingFavoriteSeatId: Long? = null,
+    val quickBookTarget: FavoriteSeat? = null,
+    val seatUsage: Map<Long, cn.edu.whu.libseat.ui.stats.SeatUsageStat> = emptyMap(),
 ) {
     val buildingName: String
         get() = catalog?.buildings?.firstOrNull { it.id == buildingId }?.name ?: "图书馆"
@@ -120,7 +124,7 @@ class HomeViewModel(
                     .getOrDefault(emptyList())
                     .firstOrNull()
                 val profile = if (!settings.demoMode && settings.isLoggedIn) repo.profile() else null
-
+                // 常用座位的使用统计（官方历史数据，带缓存）
                 _state.update {
                     it.copy(
                         loading = false,
@@ -134,6 +138,9 @@ class HomeViewModel(
                         error = null,
                     )
                 }
+
+                // 常用座位的使用统计（官方历史数据，带缓存），异步加载，失败不影响首页
+                loadSeatUsage()
             } catch (e: SessionExpiredException) {
                 val latest = runCatching { repo.currentSettings() }.getOrNull()
                 _state.update {
@@ -215,13 +222,23 @@ class HomeViewModel(
         }
     }
 
+    /** 点常用座位卡片：先弹时间段选择，再确认预约。 */
     fun quickBookFavorite(favorite: FavoriteSeat) {
+        _state.update { it.copy(quickBookTarget = favorite) }
+    }
+
+    fun dismissQuickBookPicker() {
+        _state.update { it.copy(quickBookTarget = null) }
+    }
+
+    fun confirmQuickBook(start: Int, end: Int) {
+        val favorite = _state.value.quickBookTarget ?: return
         if (_state.value.bookingFavoriteSeatId != null) return
         viewModelScope.launch {
             _state.update { it.copy(bookingFavoriteSeatId = favorite.seatId) }
             try {
                 val settings = repo.currentSettings()
-                when (val result = quickBook.book(favorite, _state.value.date, settings.fallbackEnabled)) {
+                when (val result = quickBook.book(favorite, _state.value.date, start, end, settings.fallbackEnabled)) {
                     is QuickBookResult.Success -> {
                         val suffix = if (result.usedFallback) {
                             "（${result.requestedSeatName} 已被占用，已换到附近 ${result.seat.name} 号）"
@@ -229,7 +246,10 @@ class HomeViewModel(
                             ""
                         }
                         _messages.emit("预约成功：${result.seat.name} 号 $suffix")
+                        _state.update { it.copy(quickBookTarget = null) }
                         refreshReservation()
+                        // 新预约会改变该座位的统计，刷新（historyAll 有缓存，代价很小）
+                        loadSeatUsage(forceRefresh = true)
                     }
 
                     is QuickBookResult.Failure -> _messages.emit(result.message)
@@ -254,6 +274,39 @@ class HomeViewModel(
             } catch (e: Exception) {
                 _messages.emit(e.message ?: "取消失败")
             }
+        }
+    }
+
+    /** 拉取官方预约历史，聚合出常用座位近一年的预约次数与总时长。 */
+    private suspend fun loadSeatUsage(forceRefresh: Boolean = false) {
+        val settings = _state.value.settings
+        if (settings.demoMode || !settings.isLoggedIn) return
+        try {
+            val oneYearAgo = LocalDate.now().minusYears(1)
+            val bySeat = repo.historyAll(forceRefresh)
+                .filter { it.seatId != 0L }
+                .mapNotNull { item ->
+                    val d = runCatching { LocalDate.parse(item.date) }.getOrNull()
+                    if (d != null && !d.isBefore(oneYearAgo)) item else null
+                }
+                .groupBy { it.seatId }
+                .mapValues { (_, recs) ->
+                    val first = recs.first()
+                    SeatUsageStat(
+                        seatId = first.seatId,
+                        label = buildString {
+                            append(first.roomName.ifBlank { first.location.substringAfterLast('|') })
+                            if (first.seatLabel.isNotBlank()) append(" · ").append(first.seatLabel).append(" 号")
+                        },
+                        count = recs.size,
+                        minutes = recs.sumOf { it.useMinute },
+                    )
+                }
+            _state.update { it.copy(seatUsage = bySeat) }
+        } catch (e: SessionExpiredException) {
+            // 会话过期由页面级错误提示处理，这里不重复弹
+        } catch (e: Exception) {
+            AppLog.e("Home", "常用座位使用统计加载失败", e)
         }
     }
 

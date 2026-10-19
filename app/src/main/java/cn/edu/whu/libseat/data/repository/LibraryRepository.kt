@@ -1,5 +1,6 @@
 package cn.edu.whu.libseat.data.repository
 
+import cn.edu.whu.libseat.core.log.AppLog
 import cn.edu.whu.libseat.core.time.TimeText
 import cn.edu.whu.libseat.data.local.CatalogSnapshot
 import cn.edu.whu.libseat.data.local.SettingsStore
@@ -29,6 +30,7 @@ class LibraryRepository(
     private val realApi: LibraryApi,
     private val jsqApi: LibraryApi,
     private val demoApi: LibraryApi = DemoLibraryApi(),
+    private val sessionRefresher: (suspend () -> String?)? = null,
 ) {
 
     val userSettings: Flow<UserSettings> = store.settings
@@ -46,6 +48,27 @@ class LibraryRepository(
         if (s.demoMode) return demoApi to DEMO_TOKEN
         if (s.token.isBlank()) throw SessionExpiredException("尚未登录图书馆账号")
         return (if (useJsq(s)) jsqApi else realApi) to s.token
+    }
+
+    /**
+     * 会话调用包装：token 过期（20003）时尝试统一认证静默续期，成功后重试一次。
+     */
+    private suspend fun <T> withSessionRetry(block: suspend (LibraryApi, String) -> T): T {
+        val (api, token) = session()
+        return try {
+            block(api, token)
+        } catch (e: SessionExpiredException) {
+            val refresher = sessionRefresher ?: throw e
+            AppLog.i("Session", "token 过期，尝试统一认证静默续期")
+            val newToken = refresher() ?: run {
+                AppLog.w("Session", "静默续期失败，需要重新登录")
+                throw e
+            }
+            val s = store.current()
+            store.saveWebSession(newToken, s.username, s.displayName)
+            AppLog.i("Session", "静默续期成功，重试原请求")
+            block(api, newToken)
+        }
     }
 
     /** 武大本部 / 已完成 Web 登录的会话走新版 /jsq 接口。 */
@@ -76,9 +99,11 @@ class LibraryRepository(
         store.saveWebSession(token, username, displayName)
     }
 
-    suspend fun profile(): UserProfile? {
-        val (api, token) = session()
-        return runCatching { api.user(token) }.getOrNull()
+    suspend fun profile(): UserProfile? = try {
+        withSessionRetry { api, token -> api.user(token) }
+    } catch (e: Exception) {
+        AppLog.w("Session", "profile 获取失败：${e.message}")
+        null
     }
 
     // ---------------- 基础数据 ----------------
@@ -90,8 +115,7 @@ class LibraryRepository(
             return cached
         }
         return try {
-            val (api, token) = session()
-            val remote = api.catalog(token)
+            val remote = withSessionRetry { api, token -> api.catalog(token) }
             val snapshot = remote.toSnapshot(source)
             store.saveCatalog(snapshot)
             snapshot
@@ -115,50 +139,81 @@ class LibraryRepository(
         floorNumber: Int? = null,
         date: String = TimeText.iso(LocalDate.now()),
     ): List<RoomStats> {
-        val (api, token) = session()
-        return if (api is cn.edu.whu.libseat.data.remote.JsqLibraryApi) {
-            api.roomStatsForFloor(token, buildingId, floorNumber, date)
-        } else {
-            api.roomStats(token, buildingId)
+        return withSessionRetry { api, token ->
+            if (api is cn.edu.whu.libseat.data.remote.JsqLibraryApi) {
+                api.roomStatsForFloor(token, buildingId, floorNumber, date)
+            } else {
+                api.roomStats(token, buildingId)
+            }
         }
     }
 
-    suspend fun seatMap(roomId: Long, date: String): SeatMap {
-        val (api, token) = session()
-        return api.seatMap(token, roomId, date)
-    }
+    suspend fun seatMap(roomId: Long, date: String): SeatMap =
+        withSessionRetry { api, token -> api.seatMap(token, roomId, date) }
 
     // ---------------- 预约 ----------------
 
-    suspend fun book(seatId: Long, date: String, start: Int, end: Int): Reservation {
-        val (api, token) = session()
-        return api.book(token, seatId, date, start, end)
+    suspend fun book(
+        seatId: Long,
+        date: String,
+        start: Int,
+        end: Int,
+        capToken: String? = null,
+    ): Reservation = withSessionRetry { api, token ->
+        api.book(token, seatId, date, start, end, capToken)
     }
+
+    /** 获取一次滑块验证 capToken（快速预约在候选座位间复用，避免反复弹验证码）。 */
+    suspend fun acquireCapToken(hint: String? = null): String? =
+        (jsqApi as? cn.edu.whu.libseat.data.remote.JsqLibraryApi)?.acquireCapToken(hint)
 
     suspend fun reservations(): List<Reservation> {
         val s = store.current()
         if (!s.demoMode && s.token.isBlank()) return emptyList()
-        val (api, token) = session()
-        return api.reservations(token)
+        return withSessionRetry { api, token -> api.reservations(token) }
     }
 
     suspend fun cancel(reservationId: Long) {
-        val (api, token) = session()
-        api.cancel(token, reservationId)
+        withSessionRetry { api, token -> api.cancel(token, reservationId) }
+    }
+
+    /** 提前结束履约（官方 make/stop / rest/v2/stop），释放座位。 */
+    suspend fun stopUsage(reservationId: Long) {
+        withSessionRetry { api, token -> api.stop(token, reservationId) }
     }
 
     suspend fun history(): List<HistoryItem> {
         val s = store.current()
         if (!s.demoMode && s.token.isBlank()) return emptyList()
-        val (api, token) = session()
-        return api.history(token)
+        return withSessionRetry { api, token -> api.history(token) }
+    }
+
+    @Volatile
+    private var historyAllCache: List<HistoryItem>? = null
+
+    @Volatile
+    private var historyAllAt = 0L
+
+    /** 全量历史预约（官方数据），10 分钟内存缓存；用于统计与常用座位使用情况。 */
+    suspend fun historyAll(forceRefresh: Boolean = false): List<HistoryItem> {
+        val s = store.current()
+        if (s.demoMode) return emptyList()
+        if (!forceRefresh && historyAllCache != null &&
+            System.currentTimeMillis() - historyAllAt < 10 * 60_000L
+        ) {
+            return historyAllCache!!
+        }
+        val list = withSessionRetry { api, token -> api.historyAll(token) }
+        historyAllCache = list
+        historyAllAt = System.currentTimeMillis()
+        return list
     }
 
     suspend fun startTimes(seatId: Long, date: String) =
-        session().let { (api, token) -> api.startTimes(token, seatId, date) }
+        withSessionRetry { api, token -> api.startTimes(token, seatId, date) }
 
     suspend fun endTimes(seatId: Long, date: String, start: Int) =
-        session().let { (api, token) -> api.endTimes(token, seatId, date, start) }
+        withSessionRetry { api, token -> api.endTimes(token, seatId, date, start) }
 
     // ---------------- 常用座位 ----------------
 

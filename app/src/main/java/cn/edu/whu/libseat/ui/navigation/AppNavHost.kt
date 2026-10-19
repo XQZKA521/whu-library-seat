@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.edu.whu.libseat.ui.captcha.SliderCaptchaDialog
 import cn.edu.whu.libseat.ui.logs.LogsScreen
+import cn.edu.whu.libseat.ui.stats.StatsScreen
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -29,6 +30,7 @@ object Routes {
     const val LOGIN = "login"
     const val SEAT_MAP = "seatmap/{roomId}/{buildingId}/{floor}/{date}"
     const val LOGS = "logs"
+    const val STATS = "stats"
 
     fun seatMap(roomId: Long, buildingId: Long, floor: Int, date: String) =
         "seatmap/$roomId/$buildingId/$floor/$date"
@@ -78,6 +80,7 @@ fun AppNavHost(app: LibrarySeatApp) {
                 onGoFavorites = { navController.navigateToTab(Routes.FAVORITES) },
                 onLogin = { navController.navigate(Routes.LOGIN) },
                 onOpenLogs = { navController.navigate(Routes.LOGS) },
+                onOpenStats = { navController.navigate(Routes.STATS) },
             )
         }
         composable(Routes.LOGIN) {
@@ -113,6 +116,9 @@ fun AppNavHost(app: LibrarySeatApp) {
         }
         composable(Routes.LOGS) {
             LogsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.STATS) {
+            StatsScreen(app = app, onBack = { navController.popBackStack() })
         }
     }
 

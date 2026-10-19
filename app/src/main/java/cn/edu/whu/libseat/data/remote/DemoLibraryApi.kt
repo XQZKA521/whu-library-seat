@@ -114,9 +114,11 @@ class DemoLibraryApi : LibraryApi {
         return buildMap(def, date)
     }
 
-    override suspend fun book(token: String, seatId: Long, date: String, start: Int, end: Int): Reservation {
-        if (end <= start) throw ApiException(null, "结束时间需要晚于开始时间")
-        if (start < 7 * 60 || end > 22 * 60) throw ApiException(null, "预约时间需在 07:00 - 22:00 之间")
+    override suspend fun book(token: String, seatId: Long, date: String, start: Int, end: Int, cachedCapToken: String?): Reservation {
+        // start = -1 表示“从现在开始”（与官方协议一致）
+        val beginMinutes = if (start < 0) TimeText.nowMinutes() else start
+        if (end <= beginMinutes) throw ApiException(null, "结束时间需要晚于开始时间")
+        if (beginMinutes < 7 * 60 || end > 22 * 60) throw ApiException(null, "预约时间需在 07:00 - 22:00 之间")
 
         val def = rooms.firstOrNull { it.id == seatId / 1000 }
             ?: throw ApiException(null, "座位不存在")
@@ -130,7 +132,7 @@ class DemoLibraryApi : LibraryApi {
             throw ApiException("14", "你已有重叠时段的预约")
         }
         val conflict = activeReservations.any { existing ->
-            existing.date == date && overlaps(existing.begin, existing.end, start, end)
+            existing.date == date && overlaps(existing.begin, existing.end, beginMinutes, end)
         }
         if (conflict) {
             throw ApiException("14", "你在该时段已有预约")
@@ -144,7 +146,7 @@ class DemoLibraryApi : LibraryApi {
             seatId = seatId,
             location = location,
             date = date,
-            begin = TimeText.minutesToHhmm(start),
+            begin = TimeText.minutesToHhmm(beginMinutes),
             end = TimeText.minutesToHhmm(end),
             status = "RESERVE",
             receipt = "D${System.currentTimeMillis() % 100000}",
@@ -177,6 +179,25 @@ class DemoLibraryApi : LibraryApi {
         bookedSeatKeys.remove(seatKey)
     }
 
+    /** 演示模式：模拟提前结束使用。 */
+    override suspend fun stop(token: String, reservationId: Long) {
+        val target = activeReservations.firstOrNull { it.id == reservationId }
+            ?: throw ApiException(null, "当前没有履约中的预约")
+        activeReservations.remove(target)
+        demoHistory.add(
+            HistoryItem(
+                id = target.id,
+                date = target.date,
+                begin = target.begin,
+                end = target.end,
+                location = target.location,
+                status = "STOP",
+            )
+        )
+        val seatKey = "${target.seatId}-${target.date}"
+        bookedSeatKeys.remove(seatKey)
+    }
+
     private fun overlaps(beginA: String, endA: String, startB: Int, endB: Int): Boolean {
         val startA = TimeText.hhmmToMinutes(beginA) ?: return false
         val finishA = TimeText.hhmmToMinutes(endA) ?: return false
@@ -194,7 +215,10 @@ class DemoLibraryApi : LibraryApi {
     }
 
     override suspend fun startTimes(token: String, seatId: Long, date: String): List<TimeSlot> {
-        return TimeText.buildDaySlots(7 * 60, 21 * 60)
+        val grid = TimeText.buildDaySlots(7 * 60, 21 * 60)
+        if (date != TimeText.iso(LocalDate.now())) return grid
+        val now = TimeText.nowMinutes()
+        return listOf(TimeSlot(now, "现在", isNow = true)) + grid.filter { it.minutes > now }
     }
 
     override suspend fun endTimes(token: String, seatId: Long, date: String, start: Int): List<TimeSlot> {

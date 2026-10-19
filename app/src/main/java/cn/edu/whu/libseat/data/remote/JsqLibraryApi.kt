@@ -63,7 +63,7 @@ import kotlin.math.roundToInt
 class JsqLibraryApi(
     private val client: OkHttpClient,
     private val baseUrlProvider: () -> String,
-    private val capTokenProvider: (suspend () -> String?)? = null,
+    private val capTokenProvider: (suspend (String?) -> String?)? = null,
 ) : LibraryApi {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -280,12 +280,16 @@ class JsqLibraryApi(
         return SeatMap(roomId, "", rows, cols, merged)
     }
 
-    override suspend fun book(token: String, seatId: Long, date: String, start: Int, end: Int): Reservation = io {
-        // 新版预约强制人机校验：由 UI 层弹出滑块，拿到 capToken 后再提交
-        val capToken = capTokenProvider?.invoke()
+    override suspend fun book(token: String, seatId: Long, date: String, start: Int, end: Int, cachedCapToken: String?): Reservation = io {
+        // 新版预约强制人机校验：由 UI 层弹出滑块，拿到 capToken 后再提交；
+        // cachedCapToken 用于快速预约的连续候选座位，避免每个座位都重新过滑块
+        val capToken = cachedCapToken ?: capTokenProvider?.invoke(null)
         if (capTokenProvider != null && capToken.isNullOrBlank()) {
             throw ApiException(null, "已取消安全验证，预约未提交")
         }
+        // 官方协议：startMinute=-1 表示“从现在开始”（服务端取当前时间），
+        // 其他值允许任意分钟（不要求半小时整数倍）；结束时间仍为半小时整数倍
+        require(end > 0) { "结束时间无效" }
         val encoded = java.net.URLEncoder.encode(capToken.orEmpty(), "UTF-8")
         val data = post(
             "/static/frontApi/make/freeBook/$seatId/$date/$start/$end?capToken=$encoded",
@@ -297,7 +301,8 @@ class JsqLibraryApi(
             seatId = seatId,
             location = o?.str("location") ?: o?.str("roomName") ?: "图书馆座位",
             date = o?.str("makeDateStr") ?: o?.str("makeDate") ?: date,
-            begin = normalizeTime(o?.str("makeBeginStr") ?: o?.str("begin")) ?: TimeText.minutesToHhmm(start),
+            begin = normalizeTime(o?.str("makeBeginStr") ?: o?.str("begin"))
+                ?: TimeText.minutesToHhmm(if (start < 0) TimeText.nowMinutes() else start),
             end = normalizeTime(o?.str("makeEndStr") ?: o?.str("end")) ?: TimeText.minutesToHhmm(end),
             status = "RESERVE",
             receipt = o?.str("receipt").orEmpty(),
@@ -324,26 +329,56 @@ class JsqLibraryApi(
         Unit
     }
 
+    /**
+     * 结束使用：官方前端在预约状态为 CHECK_IN（履约中）时调用，
+     * POST /static/frontApi/make/stop，空 body，服务端按当前登录态结束本次使用。
+     */
+    override suspend fun stop(token: String, reservationId: Long): Unit = io {
+        val data = post("/static/frontApi/make/stop", token)
+        // 官方前端会检查 data.status，业务失败时把 message 抛出来
+        val o = data.asObject()
+        if (o?.bool("status") == false) {
+            throw ApiException(null, o.str("message") ?: "结束使用失败")
+        }
+        Unit
+    }
+
     override suspend fun history(token: String): List<HistoryItem> = io {
         val data = post("/static/frontApi/user/history/1/20", token)
         val arr = (data.asObject()?.get("list") as? JsonArray) ?: return@io emptyList()
-        arr.mapNotNull { el ->
-            val o = el.asObject() ?: return@mapNotNull null
-            HistoryItem(
-                id = o.long("id") ?: 0L,
-                date = o.str("makeDateStr", "makeDate", "date").orEmpty(),
-                begin = normalizeTime(o.str("makeBeginStr") ?: o.str("begin")).orEmpty(),
-                end = normalizeTime(o.str("makeEndStr") ?: o.str("end")).orEmpty(),
-                location = o.str("location") ?: o.str("roomName").orEmpty(),
-                status = o.str("status") ?: o.str("stat").orEmpty(),
-            )
-        }
+        arr.mapNotNull { el -> (el.asObject())?.let { parseHistory(it) } }
     }
+
+    /** 分页拉取全部历史预约（官方数据，用于统计）。 */
+    override suspend fun historyAll(token: String, maxPages: Int): List<HistoryItem> = io {
+        val all = mutableListOf<HistoryItem>()
+        for (page in 1..maxPages) {
+            val data = post("/static/frontApi/user/history/$page/50", token)
+            val arr = (data.asObject()?.get("list") as? JsonArray) ?: break
+            val items = arr.mapNotNull { el -> (el.asObject())?.let { parseHistory(it) } }
+            all += items
+            if (items.size < 50) break
+        }
+        all
+    }
+
+    private fun parseHistory(o: JsonObject): HistoryItem = HistoryItem(
+        id = o.long("id") ?: 0L,
+        date = o.str("makeDateStr", "makeDate", "date").orEmpty(),
+        begin = normalizeTime(o.str("makeBeginStr") ?: o.str("begin")).orEmpty(),
+        end = normalizeTime(o.str("makeEndStr") ?: o.str("end")).orEmpty(),
+        location = o.str("location") ?: o.str("roomName").orEmpty(),
+        status = o.str("status") ?: o.str("stat").orEmpty(),
+        seatId = o.long("seatId") ?: 0L,
+        seatLabel = o.str("seatLabel").orEmpty(),
+        roomName = o.str("roomName").orEmpty(),
+        useMinute = o.int("useMinute") ?: 0,
+    )
 
     override suspend fun startTimes(token: String, seatId: Long, date: String): List<TimeSlot> = io {
         val data = post("/static/frontApi/res/getStartTimes/$seatId/$date", token)
         val slots = parseTimePairs(data)
-        slots.ifEmpty { TimeText.buildDaySlots(7 * 60, 21 * 60) }
+        slots.ifEmpty { fallbackStartTimes(date) }
     }
 
     override suspend fun endTimes(token: String, seatId: Long, date: String, start: Int): List<TimeSlot> = io {
@@ -360,6 +395,8 @@ class JsqLibraryApi(
             username = o?.str("username") ?: o?.str("userName").orEmpty(),
             violationCount = o?.int("violationCount") ?: o?.int("breachCount") ?: 0,
             checkedIn = o?.bool("checkedIn") ?: false,
+            totalMake = o?.int("totalMake") ?: 0,
+            totalMinute = o?.int("totalTime") ?: 0,
         )
     }
 
@@ -719,11 +756,27 @@ class JsqLibraryApi(
 
     private fun normalizeSlot(value: String, label: String?): TimeSlot? {
         val minutes = when {
-            value.equals("now", true) -> TimeText.nowRoundedToHalfHour()
+            // 官方“现在”选项：展示用精确当前分钟，预约时按协议传 -1
+            value.equals("now", true) || value == "现在" ->
+                TimeText.nowMinutes()
             value.contains(":") -> TimeText.hhmmToMinutes(value)
             else -> value.toIntOrNull()
         } ?: return null
-        return TimeSlot(minutes, label ?: TimeText.minutesToHhmm(minutes))
+        val isNow = value.equals("now", true) || value == "现在"
+        return TimeSlot(
+            minutes = minutes,
+            label = label ?: if (isNow) "现在" else TimeText.minutesToHhmm(minutes),
+            isNow = isNow,
+        )
+    }
+
+    /** getStartTimes 异常时的兜底：今天带“现在”选项 + 半小时网格。 */
+    private fun fallbackStartTimes(date: String): List<TimeSlot> {
+        val grid = TimeText.buildDaySlots(7 * 60, 21 * 60)
+        if (date != TimeText.iso(LocalDate.now())) return grid
+        val now = TimeText.nowMinutes()
+        return listOf(TimeSlot(now, "现在", isNow = true)) +
+            grid.filter { it.minutes > now }
     }
 
     private fun normalizeTime(raw: String?): String? {
@@ -753,6 +806,22 @@ class JsqLibraryApi(
     // ---------------- HTTP ----------------
 
     private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+
+    /** 弹出滑块验证并等待用户完成，返回 capToken；用户取消时返回 null。 */
+    suspend fun acquireCapToken(hint: String? = null): String? = capTokenProvider?.invoke(hint)
+
+    /** 用统一认证 SSO 票据换取新的 jsq 登录态（公开接口，无需已有 token）。 */
+    suspend fun casAuth(ticket: String): String = io {
+        val body = JsonObject(
+            mapOf(
+                "token" to JsonPrimitive(ticket),
+                "loginType" to JsonPrimitive("PC"),
+            )
+        )
+        val data = post("/static/public/auth/cas/$ticket", "", body)
+        (data as? JsonObject)?.str("token")
+            ?: throw ApiException(null, "统一认证换取登录态失败")
+    }
 
     private suspend fun post(
         path: String,

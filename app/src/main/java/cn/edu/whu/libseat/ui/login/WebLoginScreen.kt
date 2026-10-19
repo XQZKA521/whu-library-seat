@@ -132,6 +132,11 @@ private fun WebLoginContent(
     val bridge = remember {
         object {
             @JavascriptInterface
+            fun onLog(message: String) {
+                cn.edu.whu.libseat.core.log.AppLog.i("WebLogin", message)
+            }
+
+            @JavascriptInterface
             fun onLogin(token: String, userInfo: String) {
                 if (token.isBlank() || handled) return
                 handled = true
@@ -248,8 +253,8 @@ private fun WebLoginContent(
             InfoBanner(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 icon = Icons.Rounded.Lock,
-                text = "请在网页中完成登录：输入读者证号/密码并填写图片验证码，" +
-                    "或点“统一身份认证”。App 不保存密码，只保留登录后的会话凭证。",
+                text = "请在网页中完成登录：输入读者证号/密码并填写图片验证码，或点“统一身份认证”。" +
+                    "推荐统一身份认证：登录一次后，掉线会自动静默续期，无需重复登录。App 不保存密码，只保留会话凭证。",
             )
 
             if (progress in 1..99) {
@@ -377,6 +382,9 @@ private const val POLL_JS = """
     return String(v).replace(/^Bearer\s+/i, '').trim();
   }
 
+  // 注意：统一认证回跳时 URL 上的 ?token= 是 SSO 票据（待页面换取），
+  // 不是 jsq 登录 token；绝不能直接拿来当会话凭证，否则后续接口全部失败。
+  // 正确做法：等页面自己用票据换取后写入 sessionStorage 的 token。
   function tokenFromUrl() {
     try {
       var m = location.href.match(/[?&#]token=([^&]+)/);
@@ -386,8 +394,14 @@ private const val POLL_JS = """
   }
 
   function check() {
-    var token = clean(read('token') || tokenFromUrl());
-    if (!token) return;
+    var token = clean(read('token'));
+    if (!token) {
+      if (tokenFromUrl() && !window.__seatCapWaitLogged) {
+        window.__seatCapWaitLogged = true;
+        try { window.SeatBridge.onLog('统一认证回跳成功，等待页面换取登录态'); } catch (e) {}
+      }
+      return;
+    }
     if (window.__seatBridgeTimer) {
       clearInterval(window.__seatBridgeTimer);
       window.__seatBridgeTimer = null;

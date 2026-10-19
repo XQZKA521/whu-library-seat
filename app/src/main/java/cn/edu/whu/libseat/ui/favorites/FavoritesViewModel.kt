@@ -50,7 +50,7 @@ class FavoritesViewModel(
             _state.update { it.copy(bookingSeatId = favorite.seatId) }
             try {
                 val settings = repo.currentSettings()
-                when (val result = quickBook.book(favorite, date, settings.fallbackEnabled)) {
+                when (val result = quickBook.book(favorite, date, settings.defaultStart, settings.defaultEnd, settings.fallbackEnabled)) {
                     is QuickBookResult.Success -> {
                         val suffix = if (result.usedFallback) {
                             "，已从 ${result.requestedSeatName} 换到附近 ${result.seat.name} 号"

@@ -19,6 +19,7 @@ data class CaptchaState(
     val visible: Boolean = false,
     val username: String = "",
     val baseUrl: String = "",
+    val hint: String? = null,
 )
 
 /**
@@ -36,8 +37,8 @@ class CaptchaManager(
 
     private var continuation: kotlinx.coroutines.CancellableContinuation<String?>? = null
 
-    suspend fun solve(): String? {
-        AppLog.i("Captcha", "预约触发人机校验，等待用户完成滑块")
+    suspend fun solve(hint: String? = null): String? {
+        AppLog.i("Captcha", "预约触发人机校验，等待用户完成滑块${if (hint.isNullOrBlank()) "" else "（$hint）"}")
         val settings = settingsStore.current()
         return suspendCancellableCoroutine { cont ->
             continuation = cont
@@ -45,6 +46,7 @@ class CaptchaManager(
                 visible = true,
                 username = settings.username,
                 baseUrl = settings.baseUrl,
+                hint = hint,
             )
             cont.invokeOnCancellation {
                 if (continuation === cont) {

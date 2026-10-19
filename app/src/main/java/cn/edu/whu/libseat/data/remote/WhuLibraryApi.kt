@@ -173,6 +173,7 @@ class WhuLibraryApi(
         date: String,
         start: Int,
         end: Int,
+        cachedCapToken: String?,
     ): Reservation = io {
         val form = mapOf(
             "t" to "1",
@@ -209,6 +210,12 @@ class WhuLibraryApi(
 
     override suspend fun cancel(token: String, reservationId: Long): Unit = io {
         unwrap(request("/rest/v2/cancel/$reservationId", token, emptyMap()))
+        Unit
+    }
+
+    /** 经典协议：POST /rest/v2/stop，表单带预约 id。 */
+    override suspend fun stop(token: String, reservationId: Long): Unit = io {
+        unwrap(request("/rest/v2/stop", token, mapOf("id" to reservationId.toString())))
         Unit
     }
 

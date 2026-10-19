@@ -51,6 +51,12 @@ object TimeText {
         else -> pretty(date)
     }
 
+    /** 当前精确分钟（不取整）。官方允许从“现在”开始预约，开始时间不必是半小时整数倍。 */
+    fun nowMinutes(): Int {
+        val now = LocalDateTime.now()
+        return now.hour * 60 + now.minute
+    }
+
     /** 当前时间向上取整到半小时，作为今天的可选开始时间。 */
     fun nowRoundedToHalfHour(): Int {
         val now = LocalDateTime.now()

@@ -12,6 +12,7 @@ import cn.edu.whu.libseat.data.remote.LibraryApi
 import cn.edu.whu.libseat.data.remote.WhuLibraryApi
 import cn.edu.whu.libseat.data.remote.defaultOkHttpClient
 import cn.edu.whu.libseat.data.repository.LibraryRepository
+import cn.edu.whu.libseat.data.session.CasSessionManager
 import cn.edu.whu.libseat.domain.usecase.QuickBookUseCase
 import cn.edu.whu.libseat.ui.captcha.CaptchaManager
 import kotlinx.coroutines.CoroutineScope
@@ -47,10 +48,18 @@ class AppContainer(context: Context) {
     private val jsqApi: LibraryApi = JsqLibraryApi(
         client = httpClient,
         baseUrlProvider = { baseUrl },
-        capTokenProvider = { captchaManager.solve() },
+        capTokenProvider = { hint -> captchaManager.solve(hint) },
     )
 
-    val repository = LibraryRepository(settingsStore, realApi, jsqApi)
+    /** token 过期时通过统一认证 SSO 静默续期。 */
+    private val casSession = CasSessionManager(context.applicationContext, jsqApi as JsqLibraryApi)
+
+    val repository = LibraryRepository(
+        store = settingsStore,
+        realApi = realApi,
+        jsqApi = jsqApi,
+        sessionRefresher = { casSession.reAuth() },
+    )
 
     val quickBook = QuickBookUseCase(repository)
 

@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.DeleteSweep
@@ -87,6 +88,7 @@ fun SettingsScreen(
     onGoFavorites: () -> Unit,
     onLogin: () -> Unit,
     onOpenLogs: () -> Unit = {},
+    onOpenStats: () -> Unit = {},
 ) {
     val vm: SettingsViewModel = viewModel(
         factory = simpleViewModelFactory { SettingsViewModel(app.container.repository) }
@@ -327,6 +329,41 @@ fun SettingsScreen(
                                 HistoryRow(item)
                             }
                         }
+                    }
+                }
+            }
+
+            item {
+                AppCard(onClick = onOpenStats) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Rounded.Insights,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("预约统计", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "预约次数 / 使用时长 / 周·月·年趋势",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            Icons.Rounded.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

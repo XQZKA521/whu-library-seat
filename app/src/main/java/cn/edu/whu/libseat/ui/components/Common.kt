@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -201,6 +203,42 @@ fun SeatLegend(modifier: Modifier = Modifier, mineLabel: String? = null) {
 }
 
 @Composable
+private fun LegendIconItem(label: String, icon: @Composable () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(10.dp), contentAlignment = Alignment.Center) { icon() }
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** 座位属性图例：靠窗 / 有电源。 */
+@Composable
+fun SeatAttrLegend(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LegendIconItem("靠窗") {
+            Box(
+                Modifier
+                    .height(10.dp)
+                    .width(2.5.dp)
+                    .background(Color(0xFF64B5F6)),
+            )
+        }
+        LegendIconItem("有电源") {
+            Icon(
+                Icons.Rounded.Bolt,
+                contentDescription = null,
+                tint = Color(0xFFFFB300),
+                modifier = Modifier.size(10.dp),
+            )
+        }
+    }
+}
+
+@Composable
 private fun LegendItem(label: String, bg: Color, fg: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -257,6 +295,27 @@ fun SeatCell(
                     .size(4.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.tertiary),
+            )
+        }
+        // 靠窗：左缘蓝色竖条（示意窗边）
+        if (seat.nearWindow) {
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .width(2.5.dp)
+                    .background(Color(0xFF64B5F6)),
+            )
+        }
+        // 有电源：左上角闪电
+        if (seat.hasPower) {
+            Icon(
+                Icons.Rounded.Bolt,
+                contentDescription = null,
+                tint = Color(0xFFFFB300),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .size(10.dp),
             )
         }
     }

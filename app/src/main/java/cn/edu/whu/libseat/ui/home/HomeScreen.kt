@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -47,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +68,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.edu.whu.libseat.LibrarySeatApp
 import cn.edu.whu.libseat.core.time.TimeText
+import cn.edu.whu.libseat.domain.model.TimeSlot
+import cn.edu.whu.libseat.ui.components.TimeDropdown
 import cn.edu.whu.libseat.domain.model.FavoriteSeat
 import cn.edu.whu.libseat.domain.model.Reservation
 import cn.edu.whu.libseat.domain.model.RoomStats
@@ -178,35 +182,10 @@ fun HomeScreen(
                 }
 
                 item {
-                    LibraryCard(
-                        state = state,
-                        onSwitchBuilding = { showBuildings = true },
-                        onSelectFloor = vm::selectFloor,
-                        onOpenRoom = { room ->
-                            onOpenSeatMap(
-                                room.room.id,
-                                room.room.buildingId,
-                                room.room.floor,
-                                TimeText.iso(state.date),
-                            )
-                        },
-                    )
-                }
-
-                if (state.reservation != null) {
-                    item {
-                        ReservationCard(
-                            reservation = state.reservation!!,
-                            onCancel = { vm.cancelReservation(state.reservation!!.id) },
-                        )
-                    }
-                }
-
-                item {
                     Box(Modifier.padding(horizontal = 20.dp)) {
                         SectionHeader(
                             title = "常用座位 · 一键预约",
-                            subtitle = "按默认时间段预约，失败自动换附近空座",
+                            subtitle = "点卡片选时间段，失败自动换附近空座",
                             actionLabel = "管理",
                             onAction = onOpenFavorites,
                         )
@@ -240,6 +219,10 @@ fun HomeScreen(
                                     start = state.settings.defaultStart,
                                     end = state.settings.defaultEnd,
                                     booking = state.bookingFavoriteSeatId == fav.seatId,
+                                    usage = state.seatUsage[fav.seatId]
+                                        ?: state.seatUsage.values.firstOrNull {
+                                            it.label.contains("· ${fav.seatName} 号")
+                                        },
                                     onBook = { vm.quickBookFavorite(fav) },
                                     onOpen = {
                                         onOpenSeatMap(
@@ -252,6 +235,31 @@ fun HomeScreen(
                                 )
                             }
                         }
+                    }
+                }
+
+                item {
+                    LibraryCard(
+                        state = state,
+                        onSwitchBuilding = { showBuildings = true },
+                        onSelectFloor = vm::selectFloor,
+                        onOpenRoom = { room ->
+                            onOpenSeatMap(
+                                room.room.id,
+                                room.room.buildingId,
+                                room.room.floor,
+                                TimeText.iso(state.date),
+                            )
+                        },
+                    )
+                }
+
+                if (state.reservation != null) {
+                    item {
+                        ReservationCard(
+                            reservation = state.reservation!!,
+                            onCancel = { vm.cancelReservation(state.reservation!!.id) },
+                        )
                     }
                 }
 
@@ -277,6 +285,18 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    state.quickBookTarget?.let { favorite ->
+        QuickBookTimeDialog(
+            favorite = favorite,
+            isToday = state.date == TimeText.today(),
+            defaultStart = state.settings.defaultStart,
+            defaultEnd = state.settings.defaultEnd,
+            booking = state.bookingFavoriteSeatId == favorite.seatId,
+            onConfirm = vm::confirmQuickBook,
+            onDismiss = vm::dismissQuickBookPicker,
+        )
     }
 
     if (showBuildings) {
@@ -800,6 +820,7 @@ private fun FavoriteCard(
     start: Int,
     end: Int,
     booking: Boolean,
+    usage: cn.edu.whu.libseat.ui.stats.SeatUsageStat?,
     onBook: () -> Unit,
     onOpen: () -> Unit,
 ) {
@@ -813,6 +834,14 @@ private fun FavoriteCard(
         onClick = onOpen,
     ) {
         Column(Modifier.padding(14.dp)) {
+            usage?.let {
+                Text(
+                    "近一年预约 ${it.count} 次 · 共 ${cn.edu.whu.libseat.ui.stats.formatMinutes(it.minutes)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(2.dp))
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     favorite.seatName,
@@ -879,4 +908,101 @@ private fun FavoriteCard(
             }
         }
     }
+}
+
+
+/**
+ * 快速预约：先选时间段，确认后预约（替代“去设置里改默认时间”）。
+ */
+@Composable
+private fun QuickBookTimeDialog(
+    favorite: FavoriteSeat,
+    isToday: Boolean,
+    defaultStart: Int,
+    defaultEnd: Int,
+    booking: Boolean,
+    onConfirm: (start: Int, end: Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // 官方允许从当前精确时间开始：今天默认选中“现在”，开始时间不必半小时取整
+    val initialStart = if (isToday) TimeText.nowMinutes() else defaultStart
+    var start by remember { mutableIntStateOf(initialStart) }
+    var startIsNow by remember { mutableStateOf(isToday) }
+    var end by remember { mutableIntStateOf(maxOf(defaultEnd, initialStart + 30)) }
+
+    val nowSlot = cn.edu.whu.libseat.domain.model.TimeSlot(TimeText.nowMinutes(), "现在", isNow = true)
+    val startSlots = (
+        if (isToday) listOf(nowSlot) else emptyList()
+        ) + TimeText.buildDaySlots(7 * 60, 21 * 60).filter {
+        !isToday || it.minutes > TimeText.nowMinutes()
+    }.ifEmpty { TimeText.buildDaySlots(7 * 60, 21 * 60) }
+    val endSlots = TimeText.buildDaySlots(start + 30, 22 * 60)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("快速预约") },
+        text = {
+            Column {
+                Text(
+                    "${favorite.buildingName} ${favorite.roomName} · ${favorite.seatName} 号座位",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (favorite.nearWindow || favorite.hasPower) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (favorite.nearWindow) Tag("靠窗")
+                        if (favorite.hasPower) Tag("有电源")
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TimeDropdown(
+                        label = "开始",
+                        value = if (startIsNow) "现在" else TimeText.minutesToHhmm(start),
+                        options = startSlots,
+                        modifier = Modifier.weight(1f),
+                        onSelect = {
+                            start = it.minutes
+                            startIsNow = it.isNow
+                            if (end <= start) end = start + 30
+                        },
+                    )
+                    Text("至", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TimeDropdown(
+                        label = "结束",
+                        value = TimeText.minutesToHhmm(end),
+                        options = endSlots,
+                        modifier = Modifier.weight(1f),
+                        onSelect = { end = it.minutes },
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    if (startIsNow) "已选择从现在开始，到馆刷卡即签到。"
+                    else "预约后请在开始时间前后 30 分钟内到馆刷卡签到。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(start, end) }, enabled = !booking) {
+                if (booking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text("预约")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !booking) { Text("取消") }
+        },
+    )
 }

@@ -45,13 +45,20 @@ interface LibraryApi {
 
     suspend fun seatMap(token: String, roomId: Long, date: String): SeatMap
 
-    suspend fun book(token: String, seatId: Long, date: String, start: Int, end: Int): Reservation
+    suspend fun book(token: String, seatId: Long, date: String, start: Int, end: Int, cachedCapToken: String? = null): Reservation
 
     suspend fun reservations(token: String): List<Reservation>
 
     suspend fun cancel(token: String, reservationId: Long)
 
+    /** 结束使用（履约中提前释放座位；新版接口按登录态结束，旧协议带 id）。 */
+    suspend fun stop(token: String, reservationId: Long): Unit =
+        throw ApiException(null, "当前数据源不支持结束使用")
+
     suspend fun history(token: String): List<HistoryItem>
+
+    /** 分页拉取全部历史预约（新版接口支持；旧实现回退到单页）。 */
+    suspend fun historyAll(token: String, maxPages: Int = 6): List<HistoryItem> = history(token)
 
     suspend fun startTimes(token: String, seatId: Long, date: String): List<TimeSlot>
 
