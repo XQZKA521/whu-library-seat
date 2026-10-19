@@ -2,4 +2,26 @@
 <resources>
     <color name="launch_background">#F5F7F2</color>
     <color name="whu_green">#0E5A3A</color>
+
+    <!-- 桌面小部件：与 App 的珞珈绿 + 浅绿卡片保持一致 -->
+    <color name="widget_surface">#FFFFFF</color>
+    <color name="widget_border">#DCE5DE</color>
+    <color name="widget_chip_bg">#E2EEE5</color>
+    <color name="widget_seat_bg">#F7F9F5</color>
+    <color name="widget_seat_border">#E3EAE4</color>
+    <color name="widget_seat_selected_bg">#D5EEDF</color>
+    <color name="widget_seat_selected_border">#0E5A3A</color>
+    <color name="widget_title">#171D19</color>
+    <color name="widget_muted">#58655C</color>
+    <color name="widget_accent">#0E5A3A</color>
+    <color name="widget_on_accent">#FFFFFF</color>
+    <color name="widget_seat_text">#171D19</color>
+    <color name="widget_seat_text_selected">#06301E</color>
+    <color name="widget_time_bg">#F1F4EF</color>
+    <color name="widget_time_text">#171D19</color>
+    <color name="widget_success">#0B5D3B</color>
+    <color name="widget_warn">#9A5B00</color>
+    <color name="widget_error">#B3261E</color>
+    <color name="widget_bar_bg">#E7EEE8</color>
+    <color name="widget_bar_fill">#0E5A3A</color>
 </resources>

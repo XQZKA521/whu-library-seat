@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 桌面小部件深色配色：跟随系统深色模式 -->
+    <color name="widget_surface">#161E19</color>
+    <color name="widget_border">#37433A</color>
+    <color name="widget_chip_bg">#33463A</color>
+    <color name="widget_seat_bg">#1C241E</color>
+    <color name="widget_seat_border">#37433A</color>
+    <color name="widget_seat_selected_bg">#145036</color>
+    <color name="widget_seat_selected_border">#8FD9B4</color>
+    <color name="widget_title">#E3EAE4</color>
+    <color name="widget_muted">#B5C2B8</color>
+    <color name="widget_accent">#8FD9B4</color>
+    <color name="widget_on_accent">#003921</color>
+    <color name="widget_seat_text">#E3EAE4</color>
+    <color name="widget_seat_text_selected">#D5EEDF</color>
+    <color name="widget_time_bg">#1F2721</color>
+    <color name="widget_time_text">#E3EAE4</color>
+    <color name="widget_success">#9FE3BC</color>
+    <color name="widget_warn">#F0C579</color>
+    <color name="widget_error">#FFB4AB</color>
+    <color name="widget_bar_bg">#253129</color>
+    <color name="widget_bar_fill">#8FD9B4</color>
+</resources>

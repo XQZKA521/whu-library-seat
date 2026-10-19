@@ -15,6 +15,8 @@ import cn.edu.whu.libseat.data.repository.LibraryRepository
 import cn.edu.whu.libseat.data.session.CasSessionManager
 import cn.edu.whu.libseat.domain.usecase.QuickBookUseCase
 import cn.edu.whu.libseat.ui.captcha.CaptchaManager
+import cn.edu.whu.libseat.widget.WidgetStore
+import cn.edu.whu.libseat.widget.WidgetSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,8 +66,27 @@ class AppContainer(context: Context) {
     val quickBook = QuickBookUseCase(repository)
 
     init {
+        // 设置（默认时段 / 演示模式 / 登录态）变化时同步给小部件
         scope.launch {
-            settingsStore.settings.collect { baseUrl = it.baseUrl.ifBlank { DEFAULT_BASE_URL } }
+            settingsStore.settings.collect { settings ->
+                baseUrl = settings.baseUrl.ifBlank { DEFAULT_BASE_URL }
+                runCatching {
+                    WidgetStore(context).apply {
+                        saveDefaultWindow(settings.defaultStart, settings.defaultEnd)
+                        saveFlags(settings.demoMode, settings.isLoggedIn)
+                    }
+                    WidgetSync.refresh(context)
+                }
+            }
+        }
+        // 常用座位变化（收藏 / 取消收藏）时同步给小部件
+        scope.launch {
+            repository.favorites.collect { favorites ->
+                runCatching {
+                    WidgetStore(context).saveFavorites(favorites)
+                    WidgetSync.refresh(context)
+                }
+            }
         }
     }
 }
@@ -80,6 +101,7 @@ class LibrarySeatApp : Application() {
             WebView.setWebContentsDebuggingEnabled(true)
         }
         AppLog.install(this)
+        WidgetSync.install(this)
         container = AppContainer(this)
     }
 }

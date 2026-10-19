@@ -3,11 +3,14 @@ package cn.edu.whu.libseat.ui.navigation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.edu.whu.libseat.ui.captcha.SliderCaptchaDialog
 import cn.edu.whu.libseat.ui.logs.LogsScreen
+import cn.edu.whu.libseat.ui.quickbook.QuickBookRequest
+import cn.edu.whu.libseat.ui.quickbook.QuickBookScreen
 import cn.edu.whu.libseat.ui.stats.StatsScreen
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -31,9 +34,13 @@ object Routes {
     const val SEAT_MAP = "seatmap/{roomId}/{buildingId}/{floor}/{date}"
     const val LOGS = "logs"
     const val STATS = "stats"
+    const val QUICK_BOOK = "quickbook/{seatId}/{date}/{start}/{end}"
 
     fun seatMap(roomId: Long, buildingId: Long, floor: Int, date: String) =
         "seatmap/$roomId/$buildingId/$floor/$date"
+
+    fun quickBook(request: QuickBookRequest) =
+        "quickbook/${request.seatId}/${request.date}/${request.start}/${request.end}"
 }
 
 private fun NavHostController.navigateToTab(route: String) {
@@ -46,7 +53,11 @@ private fun NavHostController.navigateToTab(route: String) {
 }
 
 @Composable
-fun AppNavHost(app: LibrarySeatApp) {
+fun AppNavHost(
+    app: LibrarySeatApp,
+    quickBookRequest: QuickBookRequest? = null,
+    onQuickBookConsumed: () -> Unit = {},
+) {
     val navController = rememberNavController()
     val captchaState by app.container.captchaManager.state.collectAsStateWithLifecycle()
 
@@ -120,6 +131,38 @@ fun AppNavHost(app: LibrarySeatApp) {
         composable(Routes.STATS) {
             StatsScreen(app = app, onBack = { navController.popBackStack() })
         }
+        composable(
+            route = Routes.QUICK_BOOK,
+            arguments = listOf(
+                navArgument("seatId") { type = NavType.LongType },
+                navArgument("date") { type = NavType.StringType },
+                navArgument("start") { type = NavType.IntType },
+                navArgument("end") { type = NavType.IntType },
+            ),
+        ) { entry ->
+            val seatId = entry.arguments?.getLong("seatId") ?: 0L
+            val date = entry.arguments?.getString("date").orEmpty()
+            val start = entry.arguments?.getInt("start") ?: 0
+            val end = entry.arguments?.getInt("end") ?: 0
+            QuickBookScreen(
+                app = app,
+                request = QuickBookRequest(seatId, date, start, end),
+                onClose = { navController.popBackStack() },
+                onOpenHome = {
+                    if (!navController.popBackStack(Routes.HOME, inclusive = false)) {
+                        navController.navigate(Routes.HOME) { launchSingleTop = true }
+                    }
+                },
+                onLogin = { navController.navigate(Routes.LOGIN) },
+            )
+        }
+    }
+
+    // 小部件发起的预约：直接进入确认页并立刻提交（放在 NavHost 之后，确保图已就绪）
+    LaunchedEffect(quickBookRequest) {
+        val request = quickBookRequest ?: return@LaunchedEffect
+        navController.navigate(Routes.quickBook(request)) { launchSingleTop = true }
+        onQuickBookConsumed()
     }
 
     SliderCaptchaDialog(
