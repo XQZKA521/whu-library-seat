@@ -40,6 +40,8 @@ data class HomeUiState(
     val error: String? = null,
     val bookingFavoriteSeatId: Long? = null,
     val quickBookTarget: FavoriteSeat? = null,
+    /** 正在结束履约（停止使用）中，按钮显示进度。 */
+    val stoppingReservation: Boolean = false,
     val seatUsage: Map<Long, cn.edu.whu.libseat.ui.stats.SeatUsageStat> = emptyMap(),
 ) {
     val buildingName: String
@@ -290,6 +292,25 @@ class HomeViewModel(
                 refreshReservation()
             } catch (e: Exception) {
                 _messages.emit(e.message ?: "取消失败")
+            }
+        }
+    }
+
+    /** 履约中提前结束使用：官方 make/stop，座位会被释放。 */
+    fun stopReservation(id: Long) {
+        if (_state.value.stoppingReservation) return
+        viewModelScope.launch {
+            _state.update { it.copy(stoppingReservation = true) }
+            try {
+                repo.stopUsage(id)
+                _messages.emit("已停止使用，座位已释放")
+                refreshReservation()
+            } catch (e: SessionExpiredException) {
+                _messages.emit("登录已失效，请重新登录")
+            } catch (e: Exception) {
+                _messages.emit(e.message ?: "停止使用失败")
+            } finally {
+                _state.update { it.copy(stoppingReservation = false) }
             }
         }
     }

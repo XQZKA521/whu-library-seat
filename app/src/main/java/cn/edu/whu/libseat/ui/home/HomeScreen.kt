@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Login
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Place
+import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Star
@@ -56,6 +57,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -100,6 +102,7 @@ fun HomeScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var showBuildings by remember { mutableStateOf(false) }
+    var showStopConfirm by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
 
     LaunchedEffect(Unit) {
@@ -258,7 +261,9 @@ fun HomeScreen(
                     item {
                         ReservationCard(
                             reservation = state.reservation!!,
+                            stopping = state.stoppingReservation,
                             onCancel = { vm.cancelReservation(state.reservation!!.id) },
+                            onStop = { showStopConfirm = true },
                         )
                     }
                 }
@@ -296,6 +301,23 @@ fun HomeScreen(
             booking = state.bookingFavoriteSeatId == favorite.seatId,
             onConfirm = vm::confirmQuickBook,
             onDismiss = vm::dismissQuickBookPicker,
+        )
+    }
+
+    if (showStopConfirm) {
+        AlertDialog(
+            onDismissRequest = { showStopConfirm = false },
+            title = { Text("停止使用") },
+            text = { Text("确认结束当前履约中的座位使用？结束后座位会被释放，本次使用提前结束。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showStopConfirm = false
+                    state.reservation?.let { vm.stopReservation(it.id) }
+                }) { Text("确认停止") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStopConfirm = false }) { Text("再想想") }
+            },
         )
     }
 
@@ -678,7 +700,12 @@ private fun RoomRow(room: RoomStats, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ReservationCard(reservation: Reservation, onCancel: () -> Unit) {
+private fun ReservationCard(
+    reservation: Reservation,
+    stopping: Boolean,
+    onCancel: () -> Unit,
+    onStop: () -> Unit,
+) {
     val beginMinutes = TimeText.hhmmToMinutes(reservation.begin)
     val endMinutes = TimeText.hhmmToMinutes(reservation.end)
     val nowMinutes = java.time.LocalTime.now().let { it.hour * 60 + it.minute }
@@ -691,14 +718,18 @@ private fun ReservationCard(reservation: Reservation, onCancel: () -> Unit) {
         if (withinWindow) "IN_USE" else "RESERVE"
     }
     val statusLabel = when (status) {
-        "IN_USE", "USING", "CHECKED_IN", "ACTIVE" -> "履约中"
+        "IN_USE", "USING", "CHECKED_IN", "CHECK_IN", "ACTIVE" -> "履约中"
         "AWAY", "LEAVE" -> "暂离中"
-        "RESERVE", "BOOKED" -> "待签到"
+        "RESERVE", "BOOKED", "RESERVED" -> "待签到"
         "COMPLETE" -> "已完成"
         else -> reservation.status.ifBlank { "已预约" }
     }
+    // 待签到（还没刷通道机）才能取消预约；已签到 / 履约中 / 暂离只能停止使用
+    val inUse = status == "IN_USE" || status == "USING" ||
+        status == "CHECKED_IN" || status == "CHECK_IN" || status == "ACTIVE"
+    val canStop = inUse || status == "AWAY" || status == "LEAVE"
     val hint = when (status) {
-        "IN_USE", "USING", "CHECKED_IN", "ACTIVE" ->
+        "IN_USE", "USING", "CHECKED_IN", "CHECK_IN", "ACTIVE" ->
             "已签到，暂离超过 30 分钟会释放座位"
 
         "AWAY", "LEAVE" -> "暂离中，请及时返回，超时会释放座位"
@@ -726,11 +757,7 @@ private fun ReservationCard(reservation: Reservation, onCancel: () -> Unit) {
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    if (status == "IN_USE" || status == "USING" || status == "CHECKED_IN" || status == "ACTIVE") {
-                        "当前使用中"
-                    } else {
-                        "当前预约"
-                    },
+                    if (canStop) "当前使用中" else "当前预约",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
@@ -773,10 +800,24 @@ private fun ReservationCard(reservation: Reservation, onCancel: () -> Unit) {
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = onCancel) {
-                    Icon(Icons.Rounded.Close, contentDescription = null, modifier = Modifier.size(15.dp))
-                    Spacer(Modifier.width(2.dp))
-                    Text("取消预约")
+                if (stopping) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .padding(horizontal = 14.dp)
+                            .size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    TextButton(onClick = if (canStop) onStop else onCancel) {
+                        Icon(
+                            if (canStop) Icons.Rounded.PowerSettingsNew else Icons.Rounded.Close,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Spacer(Modifier.width(2.dp))
+                        Text(if (canStop) "停止使用" else "取消预约")
+                    }
                 }
             }
         }
@@ -834,19 +875,29 @@ private fun FavoriteCard(
         onClick = onOpen,
     ) {
         Column(Modifier.padding(14.dp)) {
-            usage?.let {
-                Text(
-                    "近一年预约 ${it.count} 次 · 共 ${cn.edu.whu.libseat.ui.stats.formatMinutes(it.minutes)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(2.dp))
-            }
+            // 卡片内容结构固定：统计行 / 座位号 / 位置 / 属性 / 时间段 各自占位，
+            // 缺数据时用透明占位补齐，保证同一行卡片的宽度和高度完全一致。
+            Text(
+                text = usage?.let {
+                    "近一年预约 ${it.count} 次 · 共 ${cn.edu.whu.libseat.ui.stats.formatMinutes(it.minutes)}"
+                } ?: "近一年暂无预约记录",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (usage != null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     favorite.seatName,
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.width(6.dp))
                 Text("号", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -868,6 +919,10 @@ private fun FavoriteCard(
             )
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (!favorite.nearWindow && !favorite.hasPower) {
+                    // 没有属性标签时用透明占位，避免这张卡片比其他卡片矮一截
+                    Box(Modifier.alpha(0f)) { Tag("靠窗") }
+                }
                 if (favorite.nearWindow) Tag("靠窗")
                 if (favorite.hasPower) Tag("有电源")
             }
