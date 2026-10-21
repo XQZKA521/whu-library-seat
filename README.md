@@ -1,8 +1,18 @@
 # 珞珈座位 · WHU Library Seat
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-v1.0-blue.svg)](../../releases/latest)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-brightgreen.svg)](https://developer.android.com)
+
 武汉大学图书馆座位预约 Android 客户端。打开即进入预约首页，支持默认图书馆 / 楼层、座位看板、常用座位一键预约，以及 WebView 信息门户登录（手动完成图片验证码）。
 
 > 本项目复用了 [whu-ham/whu-ham.github.io](https://github.com/whu-ham/whu-ham.github.io) 所描述的图书馆预约业务逻辑，以及 seat.lib.whu.edu.cn 的座位系统接口约定；UI 与数据层为原生 Android 重写。
+
+## 下载
+
+前往 [Releases](../../releases/latest) 下载 `whu-library-seat-v1.0.apk` 安装即可（Android 8.0 及以上）。
+
+> 首次安装需在系统设置中允许「安装未知来源应用」。APK 使用项目自签名证书，与后续版本保持一致，可直接覆盖升级。
 
 ![首页](screenshots/31-home-final.png)
 
@@ -103,6 +113,26 @@ adb shell am start -n cn.edu.whu.libseat/.MainActivity
 
 `local.properties` 中的 `sdk.dir` 需指向本机 Android SDK。
 
+### 发行版签名
+
+`assembleRelease` 会从项目根目录的 `keystore.properties` 读取签名信息（该文件与密钥均已在 `.gitignore` 中排除）：
+
+```properties
+storeFile=/absolute/path/to/your-release.jks
+storePassword=******
+keyAlias=your-alias
+keyPassword=******
+```
+
+生成密钥：
+
+```bash
+keytool -genkeypair -v -keystore release.jks -alias your-alias \
+  -keyalg RSA -keysize 2048 -validity 10950
+```
+
+缺少 `keystore.properties` 时，`assembleRelease` 仍可正常构建，只是产物为未签名 APK。
+
 ## 目录结构
 
 ```
@@ -153,3 +183,9 @@ app/src/main/java/cn/edu/whu/libseat/widget/
 ## 说明
 
 本项目不是图书馆官方客户端。请遵守座位系统规则，避免高频请求；演示模式数据仅用于界面与流程验证。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 XQZKA521
+
+本项目与武汉大学图书馆无隶属关系，仅供学习交流使用。使用本客户端产生的任何后果由使用者自行承担。

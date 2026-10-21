@@ -9,3 +9,12 @@ captures/
 .cxx/
 *.apk
 *.aab
+
+# 签名配置与密钥，绝不入库
+keystore.properties
+*.jks
+*.keystore
+signing.properties
+
+# 本地 AI 助手工作目录
+.workbuddy-ai/
